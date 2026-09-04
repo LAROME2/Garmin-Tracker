@@ -1,0 +1,6 @@
+{
+  "name": "mi-garmin-webapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dashboard personal de datos de Garmin (lee de Supabase)"
+}
