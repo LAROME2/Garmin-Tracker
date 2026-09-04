@@ -108,6 +108,16 @@ def safe(fn, *args, **kwargs) -> Optional[Any]:
         return None
 
 
+def to_int(value: Any) -> Optional[int]:
+    """Garmin a veces manda enteros como '138.0'; Postgres los rechaza tal cual."""
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def build_daily_summary(client: Garmin, day: date) -> dict[str, Any]:
     d = day.isoformat()
     stats = safe(client.get_stats, d) or {}
@@ -119,25 +129,38 @@ def build_daily_summary(client: Garmin, day: date) -> dict[str, Any]:
 
     return {
         "date": d,
-        "steps": stats.get("totalSteps"),
-        "resting_hr": stats.get("restingHeartRate"),
-        "stress_avg": stats.get("averageStressLevel"),
-        "body_battery_min": stats.get("bodyBatteryLowestValue"),
-        "body_battery_max": stats.get("bodyBatteryHighestValue"),
-        "sleep_score": sleep_summary.get("sleepScores", {}).get("overall", {}).get("value")
-        if isinstance(sleep_summary.get("sleepScores"), dict)
-        else None,
-        "sleep_duration_sec": sleep_summary.get("sleepTimeSeconds"),
+        "steps": to_int(stats.get("totalSteps")),
+        "resting_hr": to_int(stats.get("restingHeartRate")),
+        "stress_avg": to_int(stats.get("averageStressLevel")),
+        "body_battery_min": to_int(stats.get("bodyBatteryLowestValue")),
+        "body_battery_max": to_int(stats.get("bodyBatteryHighestValue")),
+        "sleep_score": to_int(
+            sleep_summary.get("sleepScores", {}).get("overall", {}).get("value")
+            if isinstance(sleep_summary.get("sleepScores"), dict)
+            else None
+        ),
+        "sleep_duration_sec": to_int(sleep_summary.get("sleepTimeSeconds")),
         "hrv_avg": hrv_summary.get("lastNightAvg"),
         "weight_kg": None,  # se agrega abajo si hay dato de báscula ese día
         "raw": {"stats": stats, "sleep": sleep_summary, "hrv": hrv_summary},
     }
 
 
-def build_activity_row(act: dict[str, Any]) -> Optional[dict[str, Any]]:
+def fetch_dynamics(client: Garmin, activity_id: int) -> dict[str, Any]:
+    """Cadencia / zancada / tiempo de contacto / oscilación vertical viven en el
+    detalle de la actividad (summaryDTO), no en el listado. Una llamada extra
+    por actividad — aceptable para un cron diario de pocas actividades."""
+    detail = safe(client.get_activity, activity_id) or {}
+    summary = detail.get("summaryDTO") or {}
+    return summary
+
+
+def build_activity_row(act: dict[str, Any], dynamics: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     activity_id = act.get("activityId")
     if activity_id is None:
         return None
+
+    dynamics = dynamics or {}
 
     distance_m = act.get("distance")
     duration_sec = act.get("duration")
@@ -157,12 +180,18 @@ def build_activity_row(act: dict[str, Any]) -> Optional[dict[str, Any]]:
         "name": act.get("activityName"),
         "distance_m": distance_m,
         "duration_sec": duration_sec,
-        "avg_hr": act.get("averageHR"),
-        "max_hr": act.get("maxHR"),
+        "avg_hr": to_int(act.get("averageHR")),
+        "max_hr": to_int(act.get("maxHR")),
         "avg_pace_min_km": avg_pace_min_km,
         "elevation_gain_m": act.get("elevationGain"),
-        "calories": act.get("calories"),
-        "raw": act,
+        "calories": to_int(act.get("calories")),
+        # Running dynamics — solo vienen si el reloj/pod las capturó.
+        "cadence_spm": to_int(dynamics.get("averageRunCadence")),
+        "stride_length_cm": dynamics.get("strideLength"),
+        "ground_contact_time_ms": dynamics.get("groundContactTime"),
+        "vertical_oscillation_cm": dynamics.get("verticalOscillation"),
+        "training_effect": dynamics.get("trainingEffect"),
+        "raw": {**act, "summaryDTO": dynamics},
     }
 
 
@@ -202,7 +231,12 @@ def main() -> None:
     activities = safe(
         client.get_activities_by_date, start_day.isoformat(), today.isoformat()
     ) or []
-    activity_rows = [r for r in (build_activity_row(a) for a in activities) if r]
+    activity_rows = []
+    for a in activities:
+        dynamics = fetch_dynamics(client, a["activityId"]) if a.get("activityId") else {}
+        row = build_activity_row(a, dynamics)
+        if row:
+            activity_rows.append(row)
     db.upsert("activities", activity_rows, conflict_col="activity_id")
     print(f"  {len(activity_rows)} actividades procesadas.")
 
@@ -248,6 +282,17 @@ class _FakeClientForDryRun:
                 "calories": 650,
             }
         ]
+
+    def get_activity(self, activity_id):
+        return {
+            "summaryDTO": {
+                "averageRunCadence": 172,
+                "strideLength": 108.4,
+                "groundContactTime": 245,
+                "verticalOscillation": 8.9,
+                "trainingEffect": 3.2,
+            }
+        }
 
 
 if __name__ == "__main__":

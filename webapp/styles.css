@@ -1,0 +1,67 @@
+:root {
+  color-scheme: dark;
+  --page:        #0d0d0d;
+  --surface:     #1a1a19;
+  --ink:         #ffffff;
+  --ink-2:       #c3c2b7;
+  --ink-muted:   #898781;
+  --grid:        #2c2c2a;
+  --baseline:    #383835;
+  --border:      rgba(255,255,255,0.10);
+  /* categorical slots, dark column, fixed order (dataviz palette) */
+  --blue:    #3987e5;   /* carreras / distancia */
+  --orange:  #d95926;   /* FC reposo */
+  --aqua:    #199e70;   /* sueño / bueno */
+  --yellow:  #c98500;
+  --violet:  #9085e9;   /* pasos */
+  --red:     #e66767;   /* atención */
+  --good:    #0ca30c;
+  --warn:    #fab219;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px 16px 48px;
+  background: var(--page); color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.25rem; margin: 4px 0 2px; font-weight: 600; }
+.subtitle { color: var(--ink-muted); font-size: 0.82rem; margin: 0 0 20px; }
+
+nav.tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+nav.tabs a {
+  color: var(--ink-2); text-decoration: none; font-size: 0.85rem;
+  padding: 7px 12px; border-radius: 999px; border: 1px solid var(--border);
+}
+nav.tabs a.active { background: var(--surface); color: var(--ink); border-color: var(--border); }
+
+.grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 20px; }
+.tile { background: var(--surface); border-radius: 14px; padding: 13px 15px; border: 1px solid var(--border); }
+.tile .label { font-size: 0.72rem; color: var(--ink-muted); }
+.tile .value { font-size: 1.55rem; font-weight: 600; margin-top: 3px; }
+.tile .value .unit { font-size: 0.85rem; font-weight: 400; color: var(--ink-2); margin-left: 2px; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+.card.primary { padding: 18px 18px 12px; }
+.card.secondary { padding: 13px 15px 8px; }
+.card h2 { font-size: 0.9rem; color: var(--ink); margin: 0 0 2px; font-weight: 600; }
+.card h2.small { font-size: 0.8rem; color: var(--ink-2); }
+.card .caption { font-size: 0.72rem; color: var(--ink-muted); margin: 0 0 10px; }
+
+.secondary-row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+@media (max-width: 560px) { .secondary-row { grid-template-columns: 1fr; } }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th { color: var(--ink-muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: .03em; }
+td:first-child, th:first-child { font-variant-numeric: normal; }
+
+#status { color: var(--ink-muted); font-size: 0.85rem; }
+canvas { max-width: 100%; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+.badge.good { background: rgba(12,163,12,0.16); color: var(--good); }
+.badge.warn { background: rgba(250,178,25,0.16); color: var(--warn); }
+.badge.muted { background: rgba(255,255,255,0.08); color: var(--ink-muted); }
+
+.tip { font-size: 0.82rem; color: var(--ink-2); padding: 8px 0; border-top: 1px solid var(--grid); }
+.tip:first-of-type { border-top: none; }

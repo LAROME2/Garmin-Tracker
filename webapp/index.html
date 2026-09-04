@@ -5,60 +5,56 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Mi Garmin</title>
 <link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#0f172a" />
+<meta name="theme-color" content="#0d0d0d" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-title" content="Mi Garmin" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 16px 16px 48px;
-    background: #0f172a; color: #e2e8f0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  h1 { font-size: 1.3rem; margin: 4px 0 20px; }
-  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 22px; }
-  .card { background: #1e293b; border-radius: 14px; padding: 14px 16px; }
-  .card .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
-  .card .value { font-size: 1.6rem; font-weight: 600; margin-top: 4px; }
-  .chart-card { background: #1e293b; border-radius: 14px; padding: 16px; margin-bottom: 22px; }
-  .chart-card h2 { font-size: 0.95rem; color: #cbd5e1; margin: 0 0 12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #334155; }
-  th { color: #94a3b8; font-weight: 500; }
-  #status { color: #94a3b8; font-size: 0.85rem; }
-  canvas { max-width: 100%; }
-</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 <h1>🏃 Mi Garmin</h1>
+<p class="subtitle">Últimos 120 días</p>
+<nav class="tabs">
+  <a href="index.html" class="active">Resumen</a>
+  <a href="coach.html">Running Coach</a>
+</nav>
+
 <div id="status">Cargando…</div>
 <div id="app" style="display:none">
 
   <div class="grid" id="summaryCards"></div>
 
-  <div class="chart-card">
-    <h2>Kilometraje semanal (carreras)</h2>
-    <canvas id="weeklyKm"></canvas>
+  <div class="card primary">
+    <h2>Carreras — kilometraje semanal</h2>
+    <p class="caption">Suma de distancia por semana ISO</p>
+    <canvas id="weeklyKm" height="140"></canvas>
   </div>
 
-  <div class="chart-card">
-    <h2>Frecuencia cardiaca en reposo</h2>
-    <canvas id="restingHr"></canvas>
+  <div class="card primary">
+    <h2>Sueño — puntaje</h2>
+    <p class="caption">Score diario de Garmin (0–100)</p>
+    <canvas id="sleepScore" height="140"></canvas>
   </div>
 
-  <div class="chart-card">
-    <h2>Sueño (score) y pasos</h2>
-    <canvas id="sleepSteps"></canvas>
+  <div class="secondary-row">
+    <div class="card secondary">
+      <h2 class="small">Pasos diarios</h2>
+      <canvas id="stepsChart" height="110"></canvas>
+    </div>
+    <div class="card secondary">
+      <h2 class="small">Frecuencia cardiaca en reposo</h2>
+      <canvas id="restingHr" height="110"></canvas>
+    </div>
   </div>
 
-  <div class="chart-card">
+  <div class="card">
     <h2>Últimas carreras</h2>
-    <table>
-      <thead><tr><th>Fecha</th><th>Km</th><th>Ritmo /km</th><th>FC prom</th></tr></thead>
-      <tbody id="runsTable"></tbody>
-    </table>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Fecha</th><th>Km</th><th>Ritmo /km</th><th>FC prom</th><th>Cadencia</th></tr></thead>
+        <tbody id="runsTable"></tbody>
+      </table>
+    </div>
   </div>
 
 </div>
@@ -68,8 +64,18 @@ const params = new URLSearchParams(location.search);
 const token = params.get("token") || localStorage.getItem("garmin_token") || "";
 if (token) localStorage.setItem("garmin_token", token);
 
+// que el link a Running Coach conserve el token
+document.querySelectorAll("nav.tabs a").forEach(a => {
+  if (token && !a.href.includes("token=")) {
+    a.href = a.getAttribute("href") + "?token=" + encodeURIComponent(token);
+  }
+});
+
 const statusEl = document.getElementById("status");
 const appEl = document.getElementById("app");
+
+const INK_2 = getCss("--ink-2"), INK_MUTED = getCss("--ink-muted"), GRID = getCss("--grid");
+function getCss(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
 function fmtPace(minPerKm) {
   if (!minPerKm) return "–";
@@ -90,14 +96,8 @@ async function load() {
     statusEl.textContent = "No se pudo conectar con el servidor.";
     return;
   }
-  if (resp.status === 401) {
-    statusEl.textContent = "Token inválido.";
-    return;
-  }
-  if (!resp.ok) {
-    statusEl.textContent = "Error cargando datos (" + resp.status + ").";
-    return;
-  }
+  if (resp.status === 401) { statusEl.textContent = "Token inválido."; return; }
+  if (!resp.ok) { statusEl.textContent = "Error cargando datos (" + resp.status + ")."; return; }
 
   const { daily, activities } = await resp.json();
   statusEl.style.display = "none";
@@ -105,8 +105,9 @@ async function load() {
 
   renderSummary(daily, activities);
   renderWeeklyKm(activities);
+  renderSleepScore(daily);
+  renderSteps(daily);
   renderRestingHr(daily);
-  renderSleepSteps(daily);
   renderRunsTable(activities);
 }
 
@@ -117,13 +118,13 @@ function renderSummary(daily, activities) {
   const kmLast30 = last30.reduce((s, a) => s + (a.distance_m || 0), 0) / 1000;
 
   const cards = [
-    { label: "Pasos (último día)", value: last.steps ?? "–" },
-    { label: "FC reposo", value: last.resting_hr ?? "–" },
     { label: "Sueño (score)", value: last.sleep_score ?? "–" },
-    { label: "Km corridos (30d)", value: kmLast30 ? kmLast30.toFixed(1) : "–" },
+    { label: "Km corridos", value: kmLast30 ? kmLast30.toFixed(1) : "–", unit: "30d" },
+    { label: "Pasos", value: last.steps ?? "–" },
+    { label: "FC reposo", value: last.resting_hr ?? "–" },
   ];
   document.getElementById("summaryCards").innerHTML = cards.map(c =>
-    `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+    `<div class="tile"><div class="label">${c.label}</div><div class="value">${c.value}${c.unit ? `<span class="unit">${c.unit}</span>` : ""}</div></div>`
   ).join("");
 }
 
@@ -133,7 +134,24 @@ function isoWeek(dateStr) {
   d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
   const week1 = new Date(d.getFullYear(), 0, 4);
   const weekNum = 1 + Math.round(((d - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
-  return `${d.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  return `${String(d.getMonth()+1).padStart(2,"0")}/${d.getDate()}`;
+}
+
+function noLegend() {
+  return { plugins: { legend: { display: false }, tooltip: tooltipStyle() } };
+}
+function tooltipStyle() {
+  return {
+    backgroundColor: "#1a1a19", borderColor: "rgba(255,255,255,0.10)", borderWidth: 1,
+    titleColor: "#ffffff", bodyColor: "#c3c2b7", padding: 10, cornerRadius: 8,
+    displayColors: false,
+  };
+}
+function axisStyle() {
+  return {
+    x: { grid: { color: GRID, drawTicks: false }, ticks: { color: INK_MUTED, font: { size: 11 } }, border: { color: GRID } },
+    y: { grid: { color: GRID, drawTicks: false }, ticks: { color: INK_MUTED, font: { size: 11 } }, border: { display: false }, beginAtZero: true },
+  };
 }
 
 function renderWeeklyKm(activities) {
@@ -143,14 +161,59 @@ function renderWeeklyKm(activities) {
     const wk = isoWeek(a.start_time);
     byWeek[wk] = (byWeek[wk] || 0) + (a.distance_m || 0) / 1000;
   });
-  const weeks = Object.keys(byWeek).sort();
+  const weeks = Object.keys(byWeek);
   new Chart(document.getElementById("weeklyKm"), {
     type: "bar",
     data: {
       labels: weeks,
-      datasets: [{ label: "Km", data: weeks.map(w => byWeek[w].toFixed(1)), backgroundColor: "#38bdf8" }],
+      datasets: [{
+        data: weeks.map(w => byWeek[w].toFixed(1)),
+        backgroundColor: getCss("--blue"),
+        borderRadius: 4, borderSkipped: false,
+        maxBarThickness: 24, categoryPercentage: 0.7,
+      }],
     },
-    options: baseOptions(),
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: axisStyle(),
+      plugins: { legend: { display: false }, tooltip: { ...tooltipStyle(), callbacks: { label: c => `${c.formattedValue} km` } } },
+    },
+  });
+}
+
+function renderSleepScore(daily) {
+  new Chart(document.getElementById("sleepScore"), {
+    type: "line",
+    data: {
+      labels: daily.map(d => isoWeek(d.date)),
+      datasets: [{
+        data: daily.map(d => d.sleep_score),
+        borderColor: getCss("--aqua"), backgroundColor: hexAlpha(getCss("--aqua"), 0.10),
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+        pointBackgroundColor: getCss("--aqua"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
+        fill: true, tension: 0.25, spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { ...axisStyle(), y: { ...axisStyle().y, suggestedMin: 0, suggestedMax: 100 } },
+      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
+    },
+  });
+}
+
+function renderSteps(daily) {
+  new Chart(document.getElementById("stepsChart"), {
+    type: "bar",
+    data: {
+      labels: daily.map(d => isoWeek(d.date)),
+      datasets: [{ data: daily.map(d => d.steps), backgroundColor: hexAlpha(getCss("--violet"), 0.75), borderRadius: 3, maxBarThickness: 8 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { display: false }, y: { ...axisStyle().y, ticks: { color: INK_MUTED, font: { size: 10 } } } },
+      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
+    },
   });
 }
 
@@ -158,31 +221,26 @@ function renderRestingHr(daily) {
   new Chart(document.getElementById("restingHr"), {
     type: "line",
     data: {
-      labels: daily.map(d => d.date),
-      datasets: [{ label: "FC reposo", data: daily.map(d => d.resting_hr), borderColor: "#f97316", tension: 0.3 }],
+      labels: daily.map(d => isoWeek(d.date)),
+      datasets: [{
+        data: daily.map(d => d.resting_hr),
+        borderColor: getCss("--orange"), borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+        pointBackgroundColor: getCss("--orange"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
+        tension: 0.25, spanGaps: true,
+      }],
     },
-    options: baseOptions(),
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { display: false }, y: { ...axisStyle().y, ticks: { color: INK_MUTED, font: { size: 10 } } } },
+      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
+    },
   });
 }
 
-function renderSleepSteps(daily) {
-  new Chart(document.getElementById("sleepSteps"), {
-    data: {
-      labels: daily.map(d => d.date),
-      datasets: [
-        { type: "line", label: "Sueño (score)", data: daily.map(d => d.sleep_score), borderColor: "#a78bfa", yAxisID: "y", tension: 0.3 },
-        { type: "bar", label: "Pasos", data: daily.map(d => d.steps), backgroundColor: "#22c55e88", yAxisID: "y1" },
-      ],
-    },
-    options: {
-      ...baseOptions(),
-      scales: {
-        y: { position: "left", grid: { color: "#334155" }, ticks: { color: "#94a3b8" } },
-        y1: { position: "right", grid: { display: false }, ticks: { color: "#94a3b8" } },
-        x: { grid: { color: "#334155" }, ticks: { color: "#94a3b8" } },
-      },
-    },
-  });
+function hexAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function renderRunsTable(activities) {
@@ -195,19 +253,9 @@ function renderRunsTable(activities) {
       <td>${a.distance_m ? (a.distance_m / 1000).toFixed(2) : "–"}</td>
       <td>${fmtPace(a.avg_pace_min_km)}</td>
       <td>${a.avg_hr ?? "–"}</td>
+      <td>${a.cadence_spm ?? "–"}</td>
     </tr>
-  `).join("") || "<tr><td colspan=4>Sin carreras en el rango.</td></tr>";
-}
-
-function baseOptions() {
-  return {
-    responsive: true,
-    plugins: { legend: { labels: { color: "#e2e8f0" } } },
-    scales: {
-      x: { grid: { color: "#334155" }, ticks: { color: "#94a3b8" } },
-      y: { grid: { color: "#334155" }, ticks: { color: "#94a3b8" } },
-    },
-  };
+  `).join("") || `<tr><td colspan="5">Sin carreras en el rango.</td></tr>`;
 }
 
 load();

@@ -28,9 +28,21 @@ create table if not exists activities (
   avg_pace_min_km numeric,
   elevation_gain_m numeric,
   calories integer,
+  cadence_spm integer,
+  stride_length_cm numeric,
+  ground_contact_time_ms numeric,
+  vertical_oscillation_cm numeric,
+  training_effect numeric,
   raw jsonb,
   updated_at timestamptz not null default now()
 );
+
+-- Si esta tabla ya existía de una corrida anterior, agrega las columnas nuevas:
+alter table activities add column if not exists cadence_spm integer;
+alter table activities add column if not exists stride_length_cm numeric;
+alter table activities add column if not exists ground_contact_time_ms numeric;
+alter table activities add column if not exists vertical_oscillation_cm numeric;
+alter table activities add column if not exists training_effect numeric;
 
 create index if not exists idx_activities_start_time on activities (start_time desc);
 create index if not exists idx_activities_type on activities (activity_type);
