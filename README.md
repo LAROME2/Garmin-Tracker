@@ -107,6 +107,38 @@ tienes que volver a escribirlo. Luego:
 Te queda un ícono como cualquier app. Ábrelo cuando quieras, sin depender de
 tu computadora — solo necesita internet en el celular.
 
+## 8. Chat con IA en el dashboard
+
+`index.html` y `coach.html` traen un chat consultivo (contestado por Claude)
+que puede leer tus datos y, si se lo pides, guardar un cálculo puntual en 4
+"slots" personalizables — no puede tocar nada más de la app. Corre a través
+de `webapp/api/chat.js`, que necesita su propia API key:
+
+1. Crea una key en [console.anthropic.com](https://console.anthropic.com) → **API Keys**.
+2. En Vercel, **Settings → Environment Variables**, agrega:
+   - `ANTHROPIC_API_KEY` — la key que acabas de crear.
+3. Vuelve a desplegar (un `git push` alcanza; si ya habías desplegado antes de
+   agregar la variable, usa **Deployments → ⋯ → Redeploy**).
+
+Tiene costo por uso (muy bajo para uso personal — el modelo usado por
+defecto es `claude-3-5-haiku`), y se cobra a tu cuenta de la API, aparte de
+tu suscripción normal de Claude.
+
+## Actualizar una instalación existente
+
+Si ya tenías esto corriendo antes de que se agregaran estrés, respiración,
+VO2 max, café y el chat:
+
+1. Vuelve a correr `supabase/schema.sql` completo en el SQL Editor de
+   Supabase — usa `add column if not exists`, así que es seguro repetirlo.
+2. Sigue el paso 8 de arriba para el chat.
+3. `respiration_avg`, `vo2max` y `caffeine_cups` deberían llenarse solos en
+   el próximo cron; `sleep_coach_recommended_sec` y `caffeine_cups` son
+   best-effort — Garmin no documenta esos campos, así que si se quedan en
+   `null` después de una corrida, revisa la columna `raw` de `daily_summary`
+   en Supabase (ahí queda el JSON completo de Garmin) y dime qué nombre de
+   campo aparece ahí para ajustar `fetch_garmin.py`.
+
 ## Notas de seguridad
 
 - No compartas el link con `?token=...` — quien lo tenga puede ver tus datos.

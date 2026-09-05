@@ -118,14 +118,65 @@ def to_int(value: Any) -> Optional[int]:
         return None
 
 
+def _extract_sleep_coach_recommended_sec(sleep: dict[str, Any]) -> Optional[int]:
+    """El campo exacto del 'sleep need' de Garmin no está documentado y ha
+    cambiado de nombre entre versiones de la app. Probamos las rutas más
+    plausibles y devolvemos None si ninguna aplica — el payload completo
+    queda en la columna `raw` para ajustar esto sin perder histórico."""
+    candidates = [
+        ("sleepNeed", "actual"),
+        ("sleepNeed", "recommended"),
+        ("dailySleepDTO", "sleepNeed", "actual"),
+    ]
+    for path in candidates:
+        node: Any = sleep
+        for key in path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if isinstance(node, (int, float)):
+            return to_int(node)
+    return None
+
+
 def build_daily_summary(client: Garmin, day: date) -> dict[str, Any]:
     d = day.isoformat()
     stats = safe(client.get_stats, d) or {}
     sleep = safe(client.get_sleep_data, d) or {}
     hrv = safe(client.get_hrv_data, d) or {}
+    respiration = safe(client.get_respiration_data, d) or {}
+    max_metrics = safe(client.get_max_metrics, d) or {}
+    # "Daily Log" de Garmin Connect (cafeína, alcohol, etc.) — nombre de campo
+    # sin confirmar contra una cuenta real; se prueban las rutas más
+    # plausibles y se guarda el payload crudo para ajustar si hace falta.
+    lifestyle = safe(client.get_lifestyle_logging_data, d) or {}
 
     sleep_summary = (sleep or {}).get("dailySleepDTO") or {}
     hrv_summary = (hrv or {}).get("hrvSummary") or {}
+
+    vo2max_value = None
+    if isinstance(max_metrics, dict):
+        generic = max_metrics.get("generic") or {}
+        vo2max_value = generic.get("vo2MaxValue") or generic.get("vo2MaxPreciseValue")
+    elif isinstance(max_metrics, list) and max_metrics:
+        generic = (max_metrics[0] or {}).get("generic") or {}
+        vo2max_value = generic.get("vo2MaxValue") or generic.get("vo2MaxPreciseValue")
+
+    respiration_avg = None
+    if isinstance(respiration, dict):
+        respiration_avg = (
+            respiration.get("avgWakingRespirationValue")
+            or respiration.get("avgSleepRespirationValue")
+        )
+
+    caffeine_cups = None
+    if isinstance(lifestyle, dict):
+        caffeine_cups = (
+            lifestyle.get("caffeineIntakeCount")
+            or lifestyle.get("caffeineCount")
+            or lifestyle.get("caffeineServings")
+        )
 
     return {
         "date": d,
@@ -140,9 +191,20 @@ def build_daily_summary(client: Garmin, day: date) -> dict[str, Any]:
             else None
         ),
         "sleep_duration_sec": to_int(sleep_summary.get("sleepTimeSeconds")),
+        "sleep_coach_recommended_sec": _extract_sleep_coach_recommended_sec(sleep or {}),
+        "respiration_avg": respiration_avg,
+        "vo2max": vo2max_value,
+        "caffeine_cups": caffeine_cups,
         "hrv_avg": hrv_summary.get("lastNightAvg"),
         "weight_kg": None,  # se agrega abajo si hay dato de báscula ese día
-        "raw": {"stats": stats, "sleep": sleep_summary, "hrv": hrv_summary},
+        "raw": {
+            "stats": stats,
+            "sleep": sleep_summary,
+            "hrv": hrv_summary,
+            "respiration": respiration,
+            "max_metrics": max_metrics,
+            "lifestyle": lifestyle,
+        },
     }
 
 
@@ -265,6 +327,15 @@ class _FakeClientForDryRun:
 
     def get_hrv_data(self, d):
         return {"hrvSummary": {"lastNightAvg": 45}}
+
+    def get_respiration_data(self, d):
+        return {"avgWakingRespirationValue": 14.5, "avgSleepRespirationValue": 13.8}
+
+    def get_max_metrics(self, d):
+        return {"generic": {"vo2MaxValue": 44.2}}
+
+    def get_lifestyle_logging_data(self, d):
+        return {"caffeineIntakeCount": 2}
 
     def get_activities_by_date(self, start, end):
         return [

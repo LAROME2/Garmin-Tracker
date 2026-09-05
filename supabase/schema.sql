@@ -10,6 +10,10 @@ create table if not exists daily_summary (
   body_battery_max integer,
   sleep_score integer,
   sleep_duration_sec integer,
+  sleep_coach_recommended_sec integer,
+  respiration_avg numeric,
+  vo2max numeric,
+  caffeine_cups numeric,
   hrv_avg numeric,
   weight_kg numeric,
   raw jsonb,
@@ -43,6 +47,12 @@ alter table activities add column if not exists stride_length_cm numeric;
 alter table activities add column if not exists ground_contact_time_ms numeric;
 alter table activities add column if not exists vertical_oscillation_cm numeric;
 alter table activities add column if not exists training_effect numeric;
+
+-- Igual para daily_summary: sueño (Sleep Coach), respiración, VO2 max y café.
+alter table daily_summary add column if not exists sleep_coach_recommended_sec integer;
+alter table daily_summary add column if not exists respiration_avg numeric;
+alter table daily_summary add column if not exists vo2max numeric;
+alter table daily_summary add column if not exists caffeine_cups numeric;
 
 create index if not exists idx_activities_start_time on activities (start_time desc);
 create index if not exists idx_activities_type on activities (activity_type);

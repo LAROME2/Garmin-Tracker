@@ -10,10 +10,10 @@
 <meta name="apple-mobile-web-app-title" content="Mi Garmin" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <link rel="stylesheet" href="styles.css" />
+<script src="chat-widget.js"></script>
 </head>
 <body>
-<h1>🏃 Mi Garmin</h1>
-<p class="subtitle">Últimos 120 días</p>
+<h1>🏃 Mi Garmin Larome</h1>
 <nav class="tabs">
   <a href="index.html" class="active">Resumen</a>
   <a href="coach.html">Running Coach</a>
@@ -22,28 +22,54 @@
 <div id="status">Cargando…</div>
 <div id="app" style="display:none">
 
+  <div class="range-filter" id="rangeFilter">
+    <button data-days="1">Hoy</button>
+    <button data-days="7">7 días</button>
+    <button data-days="30" class="active">30 días</button>
+    <button data-days="90">90 días</button>
+  </div>
+
   <div class="grid" id="summaryCards"></div>
 
-  <div class="card primary">
-    <h2>Carreras — kilometraje semanal</h2>
-    <p class="caption">Suma de distancia por semana ISO</p>
-    <canvas id="weeklyKm" height="140"></canvas>
+  <div class="card primary chat-card">
+    <h2>Pregúntale a tu coach</h2>
+    <p class="caption">Contestado por Claude, a partir de tu sueño, estrés y actividad de este rango — pídele que guarde un cálculo (ej. tu IMC) en los slots 🔧 de arriba</p>
+    <div class="chat-messages" id="chatResumenMessages">
+      <div class="chat-msg assistant">Hola Larome, soy tu coach. Pregúntame sobre tu sueño, estrés o actividad reciente.</div>
+    </div>
+    <form class="chat-input-row" id="chatResumenForm">
+      <input type="text" id="chatResumenInput" placeholder="Ej. ¿Cómo va mi sueño esta semana?" autocomplete="off" />
+      <button type="submit">Enviar</button>
+    </form>
+    <p class="chat-hint" id="chatResumenHint"></p>
   </div>
 
   <div class="card primary">
-    <h2>Sueño — puntaje</h2>
-    <p class="caption">Score diario de Garmin (0–100)</p>
-    <canvas id="sleepScore" height="140"></canvas>
+    <h2>Sueño</h2>
+    <p class="caption">Score diario de Garmin (0–100) y tiempo dormido</p>
+    <div class="grid sleep-stats" id="sleepStats"></div>
+    <div class="chart-wrap"><canvas id="sleepScore"></canvas></div>
   </div>
 
   <div class="secondary-row">
     <div class="card secondary">
       <h2 class="small">Pasos diarios</h2>
-      <canvas id="stepsChart" height="110"></canvas>
+      <div class="chart-wrap sm"><canvas id="stepsChart"></canvas></div>
     </div>
     <div class="card secondary">
       <h2 class="small">Frecuencia cardiaca en reposo</h2>
-      <canvas id="restingHr" height="110"></canvas>
+      <div class="chart-wrap sm"><canvas id="restingHr"></canvas></div>
+    </div>
+  </div>
+
+  <div class="secondary-row">
+    <div class="card secondary">
+      <h2 class="small">Estrés promedio</h2>
+      <div class="chart-wrap sm"><canvas id="stressChart"></canvas></div>
+    </div>
+    <div class="card secondary">
+      <h2 class="small">Respiración</h2>
+      <div class="chart-wrap sm"><canvas id="respirationChart"></canvas></div>
     </div>
   </div>
 
@@ -55,6 +81,12 @@
         <tbody id="runsTable"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="card primary">
+    <h2>Carreras — kilometraje semanal</h2>
+    <p class="caption">Suma de distancia por semana ISO</p>
+    <div class="chart-wrap"><canvas id="weeklyKm"></canvas></div>
   </div>
 
 </div>
@@ -74,8 +106,8 @@ document.querySelectorAll("nav.tabs a").forEach(a => {
 const statusEl = document.getElementById("status");
 const appEl = document.getElementById("app");
 
-const INK_2 = getCss("--ink-2"), INK_MUTED = getCss("--ink-muted"), GRID = getCss("--grid");
 function getCss(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+const INK_MUTED = getCss("--ink-muted"), GRID = getCss("--grid");
 
 function fmtPace(minPerKm) {
   if (!minPerKm) return "–";
@@ -83,6 +115,21 @@ function fmtPace(minPerKm) {
   const s = Math.round((minPerKm - m) * 60);
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+function fmtDuration(sec) {
+  if (sec == null) return "–";
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+function hexAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function dateKey(s) { return (s || "").slice(0, 10); }
+
+let allDaily = [];
+let allActivities = [];
+let selectedDays = 30;
 
 async function load() {
   if (!token) {
@@ -100,46 +147,88 @@ async function load() {
   if (!resp.ok) { statusEl.textContent = "Error cargando datos (" + resp.status + ")."; return; }
 
   const { daily, activities } = await resp.json();
+  allDaily = daily;
+  allActivities = activities;
   statusEl.style.display = "none";
   appEl.style.display = "block";
 
-  renderSummary(daily, activities);
-  renderWeeklyKm(activities);
-  renderSleepScore(daily);
-  renderSteps(daily);
-  renderRestingHr(daily);
-  renderRunsTable(activities);
+  renderResumen(selectedDays);
+  initResumenChat();
+
+  document.getElementById("rangeFilter").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-days]");
+    if (!btn) return;
+    document.querySelectorAll("#rangeFilter button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    renderResumen(Number(btn.dataset.days));
+  });
 }
 
-function renderSummary(daily, activities) {
-  const last = daily[daily.length - 1] || {};
-  const runs = activities.filter(a => (a.activity_type || "").includes("running"));
-  const last30 = runs.filter(a => new Date(a.start_time) > new Date(Date.now() - 30 * 86400000));
-  const kmLast30 = last30.reduce((s, a) => s + (a.distance_m || 0), 0) / 1000;
+function windowedDaily(days) {
+  return allDaily.slice(Math.max(0, allDaily.length - days));
+}
+function windowedActivities(days) {
+  if (!allDaily.length) return [];
+  const cutoff = new Date(allDaily[allDaily.length - 1].date).getTime() - days * 86400000;
+  return allActivities.filter(a => new Date(a.start_time).getTime() > cutoff);
+}
 
+// 4 tarjetas intercambiables: el chat las puede llenar (vía la herramienta
+// set_data_slot) con un dato consultivo puntual, ej. "calcula mi IMC y
+// guárdalo en el slot 1". Solo viven en el navegador, no se guardan.
+let customSlots = [
+  { label: "Slot 1", value: "vacío", unit: "" },
+  { label: "Slot 2", value: "vacío", unit: "" },
+  { label: "Slot 3", value: "vacío", unit: "" },
+  { label: "Slot 4", value: "vacío", unit: "" },
+];
+
+function renderResumen(days) {
+  selectedDays = days;
+  const dailyW = windowedDaily(days);
+  const activitiesW = windowedActivities(days);
+  renderSummary(dailyW, activitiesW);
+  renderWeeklyKm(activitiesW);
+  renderSleepStats(dailyW);
+  renderSleepScore(dailyW);
+  renderSteps(dailyW);
+  renderRestingHr(dailyW);
+  renderStress(dailyW);
+  renderRespiration(dailyW);
+  renderRunsTable(activitiesW);
+}
+
+function renderSummary(dailyW, activitiesW) {
+  const last = dailyW[dailyW.length - 1] || {};
+  const runs = activitiesW.filter(a => (a.activity_type || "").includes("running"));
+  const kmWindow = runs.reduce((s, a) => s + (a.distance_m || 0), 0) / 1000;
+  const exerciseSec = activitiesW.reduce((s, a) => s + (a.duration_sec || 0), 0);
   const cards = [
     { label: "Sueño (score)", value: last.sleep_score ?? "–" },
-    { label: "Km corridos", value: kmLast30 ? kmLast30.toFixed(1) : "–", unit: "30d" },
+    { label: "Km corridos", value: kmWindow ? kmWindow.toFixed(1) : "–", unit: `${selectedDays}d` },
     { label: "Pasos", value: last.steps ?? "–" },
     { label: "FC reposo", value: last.resting_hr ?? "–" },
+    { label: "VO2 max", value: last.vo2max ?? "–", unit: "ml/kg/min" },
+    { label: "Actividades", value: activitiesW.length, unit: `${selectedDays}d` },
+    { label: "Tiempo ejercicio", value: exerciseSec ? fmtDuration(exerciseSec) : "–", unit: `${selectedDays}d` },
+    { label: "Café", value: last.caffeine_cups ?? "–", unit: "tazas hoy" },
+    ...customSlots.map(s => ({ label: s.label, value: s.value, unit: s.unit, slot: true })),
   ];
   document.getElementById("summaryCards").innerHTML = cards.map(c =>
-    `<div class="tile"><div class="label">${c.label}</div><div class="value">${c.value}${c.unit ? `<span class="unit">${c.unit}</span>` : ""}</div></div>`
+    `<div class="tile ${c.slot ? "slot" : ""}"><div class="label">${c.slot ? "🔧 " : ""}${c.label}</div><div class="value">${c.value}${c.unit ? `<span class="unit">${c.unit}</span>` : ""}</div></div>`
   ).join("");
+}
+
+function renderCustomSlots() {
+  renderSummary(windowedDaily(selectedDays), windowedActivities(selectedDays));
 }
 
 function isoWeek(dateStr) {
   const d = new Date(dateStr);
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
-  const week1 = new Date(d.getFullYear(), 0, 4);
-  const weekNum = 1 + Math.round(((d - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
   return `${String(d.getMonth()+1).padStart(2,"0")}/${d.getDate()}`;
 }
 
-function noLegend() {
-  return { plugins: { legend: { display: false }, tooltip: tooltipStyle() } };
-}
 function tooltipStyle() {
   return {
     backgroundColor: "#1a1a19", borderColor: "rgba(255,255,255,0.10)", borderWidth: 1,
@@ -154,15 +243,18 @@ function axisStyle() {
   };
 }
 
-function renderWeeklyKm(activities) {
-  const runs = activities.filter(a => (a.activity_type || "").includes("running"));
+let weeklyKmChart, sleepScoreChart, stepsChartInst, restingHrChart, stressChartInst, respirationChartInst;
+
+function renderWeeklyKm(activitiesW) {
+  const runs = activitiesW.filter(a => (a.activity_type || "").includes("running"));
   const byWeek = {};
   runs.forEach(a => {
     const wk = isoWeek(a.start_time);
     byWeek[wk] = (byWeek[wk] || 0) + (a.distance_m || 0) / 1000;
   });
   const weeks = Object.keys(byWeek);
-  new Chart(document.getElementById("weeklyKm"), {
+  if (weeklyKmChart) weeklyKmChart.destroy();
+  weeklyKmChart = new Chart(document.getElementById("weeklyKm"), {
     type: "bar",
     data: {
       labels: weeks,
@@ -181,13 +273,31 @@ function renderWeeklyKm(activities) {
   });
 }
 
-function renderSleepScore(daily) {
-  new Chart(document.getElementById("sleepScore"), {
+function renderSleepStats(dailyW) {
+  const last = dailyW[dailyW.length - 1] || {};
+  const met = last.sleep_duration_sec != null && last.sleep_coach_recommended_sec != null && last.sleep_duration_sec >= last.sleep_coach_recommended_sec - 600;
+  const tiles = [
+    { label: "Score", value: last.sleep_score ?? "–" },
+    { label: "Tiempo dormido", value: fmtDuration(last.sleep_duration_sec) },
+    { label: "Sleep Coach recomienda", value: fmtDuration(last.sleep_coach_recommended_sec), badge: last.sleep_coach_recommended_sec != null ? (met ? { level: "good", text: "cumplida" } : { level: "warn", text: "por debajo" }) : null },
+  ];
+  document.getElementById("sleepStats").innerHTML = tiles.map(t => `
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}</div>
+      ${t.badge ? `<div style="margin-top:5px"><span class="badge ${t.badge.level}">${t.badge.text}</span></div>` : ""}
+    </div>
+  `).join("");
+}
+
+function renderSleepScore(dailyW) {
+  if (sleepScoreChart) sleepScoreChart.destroy();
+  sleepScoreChart = new Chart(document.getElementById("sleepScore"), {
     type: "line",
     data: {
-      labels: daily.map(d => isoWeek(d.date)),
+      labels: dailyW.map(d => isoWeek(d.date)),
       datasets: [{
-        data: daily.map(d => d.sleep_score),
+        data: dailyW.map(d => d.sleep_score),
         borderColor: getCss("--aqua"), backgroundColor: hexAlpha(getCss("--aqua"), 0.10),
         borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
         pointBackgroundColor: getCss("--aqua"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
@@ -197,17 +307,27 @@ function renderSleepScore(daily) {
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: { ...axisStyle(), y: { ...axisStyle().y, suggestedMin: 0, suggestedMax: 100 } },
-      plugins: { legend: { display: false }, tooltip: tooltipStyle() },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...tooltipStyle(),
+          callbacks: {
+            label: c => `Score: ${c.formattedValue}`,
+            afterLabel: c => `Dormido: ${fmtDuration(dailyW[c.dataIndex].sleep_duration_sec)}`,
+          },
+        },
+      },
     },
   });
 }
 
-function renderSteps(daily) {
-  new Chart(document.getElementById("stepsChart"), {
+function renderSteps(dailyW) {
+  if (stepsChartInst) stepsChartInst.destroy();
+  stepsChartInst = new Chart(document.getElementById("stepsChart"), {
     type: "bar",
     data: {
-      labels: daily.map(d => isoWeek(d.date)),
-      datasets: [{ data: daily.map(d => d.steps), backgroundColor: hexAlpha(getCss("--violet"), 0.75), borderRadius: 3, maxBarThickness: 8 }],
+      labels: dailyW.map(d => isoWeek(d.date)),
+      datasets: [{ data: dailyW.map(d => d.steps), backgroundColor: hexAlpha(getCss("--violet"), 0.75), borderRadius: 3, maxBarThickness: 8 }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -217,13 +337,14 @@ function renderSteps(daily) {
   });
 }
 
-function renderRestingHr(daily) {
-  new Chart(document.getElementById("restingHr"), {
+function renderRestingHr(dailyW) {
+  if (restingHrChart) restingHrChart.destroy();
+  restingHrChart = new Chart(document.getElementById("restingHr"), {
     type: "line",
     data: {
-      labels: daily.map(d => isoWeek(d.date)),
+      labels: dailyW.map(d => isoWeek(d.date)),
       datasets: [{
-        data: daily.map(d => d.resting_hr),
+        data: dailyW.map(d => d.resting_hr),
         borderColor: getCss("--orange"), borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
         pointBackgroundColor: getCss("--orange"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
         tension: 0.25, spanGaps: true,
@@ -237,14 +358,52 @@ function renderRestingHr(daily) {
   });
 }
 
-function hexAlpha(hex, alpha) {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
-  return `rgba(${r},${g},${b},${alpha})`;
+function renderStress(dailyW) {
+  if (stressChartInst) stressChartInst.destroy();
+  stressChartInst = new Chart(document.getElementById("stressChart"), {
+    type: "line",
+    data: {
+      labels: dailyW.map(d => isoWeek(d.date)),
+      datasets: [{
+        data: dailyW.map(d => d.stress_avg),
+        borderColor: getCss("--yellow"), backgroundColor: hexAlpha(getCss("--yellow"), 0.10),
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+        pointBackgroundColor: getCss("--yellow"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
+        fill: true, tension: 0.25, spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { display: false }, y: { ...axisStyle().y, suggestedMax: 100, ticks: { color: INK_MUTED, font: { size: 10 } } } },
+      plugins: { legend: { display: false }, tooltip: { ...tooltipStyle(), callbacks: { label: c => `${c.formattedValue} / 100` } } },
+    },
+  });
 }
 
-function renderRunsTable(activities) {
-  const runs = activities
+function renderRespiration(dailyW) {
+  if (respirationChartInst) respirationChartInst.destroy();
+  respirationChartInst = new Chart(document.getElementById("respirationChart"), {
+    type: "line",
+    data: {
+      labels: dailyW.map(d => isoWeek(d.date)),
+      datasets: [{
+        data: dailyW.map(d => d.respiration_avg),
+        borderColor: getCss("--teal"), backgroundColor: hexAlpha(getCss("--teal"), 0.10),
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+        pointBackgroundColor: getCss("--teal"), pointBorderColor: "#1a1a19", pointBorderWidth: 2,
+        fill: true, tension: 0.25, spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { display: false }, y: { ...axisStyle().y, ticks: { color: INK_MUTED, font: { size: 10 } } } },
+      plugins: { legend: { display: false }, tooltip: { ...tooltipStyle(), callbacks: { label: c => `${c.formattedValue} rpm` } } },
+    },
+  });
+}
+
+function renderRunsTable(activitiesW) {
+  const runs = activitiesW
     .filter(a => (a.activity_type || "").includes("running"))
     .slice(0, 10);
   document.getElementById("runsTable").innerHTML = runs.map(a => `
@@ -256,6 +415,66 @@ function renderRunsTable(activities) {
       <td>${a.cadence_spm ?? "–"}</td>
     </tr>
   `).join("") || `<tr><td colspan="5">Sin carreras en el rango.</td></tr>`;
+}
+
+function avgOf(arr, key) {
+  const vals = arr.map(d => d[key]).filter(v => v != null);
+  return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+}
+
+function buildResumenContext() {
+  const dailyW = windowedDaily(selectedDays);
+  const activitiesW = windowedActivities(selectedDays);
+  const last = dailyW[dailyW.length - 1] || {};
+  const runs = activitiesW.filter(a => (a.activity_type || "").includes("running"));
+  const kmWindow = runs.reduce((s, a) => s + (a.distance_m || 0), 0) / 1000;
+  const lines = [
+    `Rango mostrado en el dashboard ahora mismo: últimos ${selectedDays} día(s).`,
+    `Sueño (último dato): score ${last.sleep_score ?? "–"}/100, dormido ${fmtDuration(last.sleep_duration_sec)}, Sleep Coach recomienda ${fmtDuration(last.sleep_coach_recommended_sec)}.`,
+    `Pasos: ${last.steps ?? "–"}. FC en reposo: ${last.resting_hr ?? "–"} bpm. VO2 max: ${last.vo2max ?? "–"} ml/kg/min.`,
+    `Estrés promedio del rango: ${avgOf(dailyW, "stress_avg") ?? "–"}/100. Respiración promedio: ${avgOf(dailyW, "respiration_avg") ?? "–"} rpm.`,
+    `Café hoy: ${last.caffeine_cups ?? "–"} tazas.`,
+    `Actividad en el rango: ${activitiesW.length} actividades, ${kmWindow.toFixed(1)} km corridos, ${runs.length} carreras.`,
+  ];
+  runs.slice(0, 5).forEach(r => {
+    lines.push(`- Carrera ${new Date(r.start_time).toLocaleDateString("es-MX")}: ${(r.distance_m / 1000).toFixed(1)} km, ritmo ${fmtPace(r.avg_pace_min_km)} min/km, FC prom ${r.avg_hr ?? "–"} bpm, cadencia ${r.cadence_spm ?? "–"} spm.`);
+  });
+  return lines.join("\n");
+}
+
+const setSlotTool = {
+  name: "set_data_slot",
+  description: "Guarda un dato puntual (un cálculo, una nota consultiva) en una de las 4 tarjetas personalizables 'Slot 1'–'Slot 4' del dashboard, para que el usuario lo vea después. Úsala SOLO cuando el usuario pida explícitamente guardar, calcular o poner algo en un slot. No modifica nada más de la app.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      slot: { type: "number", description: "Número de slot a usar, del 1 al 4." },
+      label: { type: "string", description: "Título corto del dato, ej. 'IMC'." },
+      value: { type: "string", description: "Valor a mostrar, ej. '23.4'." },
+      unit: { type: "string", description: "Unidad opcional, ej. 'kg/m²'." },
+    },
+    required: ["slot", "label", "value"],
+  },
+  execute(input) {
+    const idx = Math.min(4, Math.max(1, Math.round(Number(input.slot)) || 1)) - 1;
+    customSlots[idx] = {
+      label: String(input.label ?? `Slot ${idx + 1}`).slice(0, 30),
+      value: String(input.value ?? "–").slice(0, 20),
+      unit: input.unit ? String(input.unit).slice(0, 14) : "",
+    };
+    renderCustomSlots();
+    return `Guardado en el slot ${idx + 1}.`;
+  },
+};
+
+function initResumenChat() {
+  initChat({
+    token,
+    formId: "chatResumenForm", inputId: "chatResumenInput", messagesId: "chatResumenMessages", hintId: "chatResumenHint",
+    systemPrompt: "Eres el coach personal de Larome dentro de su dashboard de Garmin. Responde en español, en máximo 4 líneas, cálido pero directo, basándote SOLO en los datos de abajo (sueño, estrés, pasos, FC, VO2 max, actividad) y en lo que el usuario te diga en el chat. Eres consultivo: solo puedes guardar datos en los 4 slots personalizables si te lo piden explícitamente, no puedes cambiar nada más de la app. Si preguntan algo que no está en los datos, dilo brevemente.",
+    buildContext: buildResumenContext,
+    tools: [setSlotTool],
+  });
 }
 
 load();

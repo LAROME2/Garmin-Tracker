@@ -11,10 +11,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <link rel="stylesheet" href="styles.css" />
 <script src="plan-21k.js"></script>
+<script src="chat-widget.js"></script>
 </head>
 <body>
 <h1>🎯 Running Coach</h1>
-<p class="subtitle">Plan 21K — comparado contra tus carreras reales</p>
 <nav class="tabs">
   <a href="index.html">Resumen</a>
   <a href="coach.html" class="active">Running Coach</a>
@@ -23,14 +23,32 @@
 <div id="status">Cargando…</div>
 <div id="app" style="display:none">
 
-  <div class="card primary" id="raceCard"></div>
+  <div class="card primary chat-card">
+    <h2>Pregúntale a tu Running Coach</h2>
+    <p class="caption">Contestado por Claude, a partir de tu plan 21K y tus carreras reales — pídele que guarde un cálculo (ej. tiempo estimado de carrera) en los slots 🔧 de Objetivo</p>
+    <div class="chat-messages" id="chatCoachMessages">
+      <div class="chat-msg assistant">Hola Larome, pregúntame sobre tu plan, tu ritmo o cómo vas hacia la carrera del 13 de septiembre.</div>
+    </div>
+    <form class="chat-input-row" id="chatCoachForm">
+      <input type="text" id="chatCoachInput" placeholder="Ej. ¿Voy bien para llegar sub 2:00?" autocomplete="off" />
+      <button type="submit">Enviar</button>
+    </form>
+    <p class="chat-hint" id="chatCoachHint"></p>
+  </div>
 
+  <div class="card primary" id="raceCard"></div>
   <div class="card primary" id="todayCard"></div>
+
+  <div class="card primary">
+    <h2>Objetivo — datos personalizados</h2>
+    <p class="caption">4 slots que tu Running Coach puede llenar cuando le pidas un cálculo sobre tu meta (ej. tiempo estimado, ritmo restante)</p>
+    <div class="grid" id="coachSlots"></div>
+  </div>
 
   <div class="card primary">
     <h2>Volumen semanal — plan vs. real</h2>
     <p class="caption">Kilómetros por semana ISO</p>
-    <canvas id="volumeChart" height="150"></canvas>
+    <div class="chart-wrap"><canvas id="volumeChart"></canvas></div>
   </div>
 
   <div class="card">
@@ -92,6 +110,9 @@ function zoneFor(pace) {
 }
 function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
 
+let allRuns = [];
+let allRunsByDate = {};
+
 async function load() {
   if (!token) { statusEl.textContent = "Falta el token de acceso. Abre el enlace completo (con ?token=...)."; return; }
   let resp;
@@ -105,15 +126,19 @@ async function load() {
   const runs = activities.filter(a => (a.activity_type || "").includes("running"));
   const runsByDate = {};
   runs.forEach(r => { runsByDate[dateKey(r.start_time)] = r; });
+  allRuns = runs;
+  allRunsByDate = runsByDate;
 
   statusEl.style.display = "none";
   appEl.style.display = "block";
 
   renderRaceCard();
   renderTodayCard(runsByDate);
+  renderCoachSlots();
   renderVolumeChart(runs);
   renderPlanTable(runsByDate);
   renderStride(runs);
+  initCoachChat();
 }
 
 function renderRaceCard() {
@@ -157,17 +182,26 @@ function renderTodayCard(runsByDate) {
   `;
 }
 
+// 4 slots del Objetivo — el chat los llena a petición, pensados para
+// cálculos sobre la meta (tiempo estimado, ritmo restante, etc.).
+let customCoachSlots = [
+  { label: "Slot 1", value: "vacío", unit: "" },
+  { label: "Slot 2", value: "vacío", unit: "" },
+  { label: "Slot 3", value: "vacío", unit: "" },
+  { label: "Slot 4", value: "vacío", unit: "" },
+];
+
+function renderCoachSlots() {
+  document.getElementById("coachSlots").innerHTML = customCoachSlots.map(s => `
+    <div class="tile slot"><div class="label">🔧 ${s.label}</div><div class="value">${s.value}${s.unit ? `<span class="unit">${s.unit}</span>` : ""}</div></div>
+  `).join("");
+}
+
 function renderVolumeChart(runs) {
   const plannedByWeek = {};
-  PLAN.sessions.forEach(s => {
-    const wk = isoWeekKey(s.date);
-    plannedByWeek[wk] = (plannedByWeek[wk] || 0) + (s.km || 0);
-  });
+  PLAN.sessions.forEach(s => { const wk = isoWeekKey(s.date); plannedByWeek[wk] = (plannedByWeek[wk] || 0) + (s.km || 0); });
   const actualByWeek = {};
-  runs.forEach(r => {
-    const wk = isoWeekKey(dateKey(r.start_time));
-    actualByWeek[wk] = (actualByWeek[wk] || 0) + (r.distance_m || 0) / 1000;
-  });
+  runs.forEach(r => { const wk = isoWeekKey(dateKey(r.start_time)); actualByWeek[wk] = (actualByWeek[wk] || 0) + (r.distance_m || 0) / 1000; });
   const weeks = Object.keys(plannedByWeek).sort();
 
   new Chart(document.getElementById("volumeChart"), {
@@ -293,6 +327,62 @@ function renderStride(runs) {
   }
   tips.push("Estos son rangos generales de la literatura de técnica de carrera, no un diagnóstico — si algo duele, consulta a un fisioterapeuta o entrenador antes de cambiar tu pisada.");
   document.getElementById("strideTips").innerHTML = tips.map(t => `<div class="tip">${t}</div>`).join("");
+}
+
+function buildCoachContext() {
+  const today = new Date().toISOString().slice(0, 10);
+  const daysLeft = daysBetween(today, PLAN.meta.raceDate);
+  const recentSessions = PLAN.sessions.filter(s => s.date <= today && s.type !== "rest").slice(-8);
+  const lines = [
+    `Meta: ${PLAN.meta.raceName}, objetivo ${PLAN.meta.goalLabel}, ritmo objetivo ${fmtPace(PLAN.meta.goalPaceLow)}–${fmtPace(PLAN.meta.goalPaceHigh)} min/km.`,
+    `Faltan ${daysLeft} días para la carrera (${PLAN.meta.raceDate}).`,
+    `Contexto del plan: ${PLAN.meta.note}`,
+    "Últimas sesiones, plan vs. real:",
+  ];
+  recentSessions.forEach(s => {
+    const real = allRunsByDate[s.date];
+    if (real) {
+      lines.push(`- ${s.date} (${s.name}): plan ${s.km} km a ${s.paceLow != null ? fmtPace(s.paceLow) + "–" + fmtPace(s.paceHigh) : "–"} min/km → real ${(real.distance_m / 1000).toFixed(1)} km a ${fmtPace(real.avg_pace_min_km)} min/km, FC ${real.avg_hr ?? "–"} bpm, cadencia ${real.cadence_spm ?? "–"} spm.`);
+    } else {
+      lines.push(`- ${s.date} (${s.name}): plan ${s.km} km — SIN REGISTRAR.`);
+    }
+  });
+  return lines.join("\n");
+}
+
+const setCoachSlotTool = {
+  name: "set_coach_slot",
+  description: "Guarda un dato puntual (un cálculo sobre la meta, una nota consultiva) en una de las 4 tarjetas personalizables 'Slot 1'–'Slot 4' de la sección Objetivo del Running Coach. Úsala SOLO cuando el usuario pida explícitamente guardar o calcular algo en un slot (ej. tiempo estimado de carrera, ritmo restante necesario). No modifica nada más de la app.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      slot: { type: "number", description: "Número de slot a usar, del 1 al 4." },
+      label: { type: "string", description: "Título corto del dato, ej. 'Tiempo estimado'." },
+      value: { type: "string", description: "Valor a mostrar, ej. '1:58:30'." },
+      unit: { type: "string", description: "Unidad opcional, ej. 'min/km'." },
+    },
+    required: ["slot", "label", "value"],
+  },
+  execute(input) {
+    const idx = Math.min(4, Math.max(1, Math.round(Number(input.slot)) || 1)) - 1;
+    customCoachSlots[idx] = {
+      label: String(input.label ?? `Slot ${idx + 1}`).slice(0, 30),
+      value: String(input.value ?? "–").slice(0, 20),
+      unit: input.unit ? String(input.unit).slice(0, 14) : "",
+    };
+    renderCoachSlots();
+    return `Guardado en el slot ${idx + 1}.`;
+  },
+};
+
+function initCoachChat() {
+  initChat({
+    token,
+    formId: "chatCoachForm", inputId: "chatCoachInput", messagesId: "chatCoachMessages", hintId: "chatCoachHint",
+    systemPrompt: "Eres el Running Coach personal de Larome, dentro de su app de entrenamiento para una carrera de 21.1 km sub 2:00. Responde en español, máximo 4-5 líneas, tono motivador pero honesto, usando SOLO los datos del plan y las carreras reales de abajo. Da recomendaciones concretas de ritmo, volumen o recuperación cuando aplique. Eres consultivo: solo puedes guardar datos en los 4 slots de la sección Objetivo si te lo piden explícitamente, no puedes cambiar nada más de la app.",
+    buildContext: buildCoachContext,
+    tools: [setCoachSlotTool],
+  });
 }
 
 load();
