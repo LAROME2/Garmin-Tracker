@@ -3,7 +3,7 @@ name: Recolectar datos de Garmin
 on:
   schedule:
     # 07:15 America/Monterrey (UTC-6) = 13:15 UTC. Ajusta si cambias de zona horaria.
-    - cron: "15 13 * * *"
+    - cron: '0 */3 * * *'
   workflow_dispatch:
     inputs:
       backfill_days:
