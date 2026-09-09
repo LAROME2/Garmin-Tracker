@@ -131,6 +131,20 @@ let allDaily = [];
 let allActivities = [];
 let selectedDays = 30;
 
+async function refreshData() {
+  // Refresco silencioso en segundo plano: no toca el chat ni los listeners,
+  // solo vuelve a traer /api/data y redibuja las gráficas con lo último.
+  let resp;
+  try {
+    resp = await fetch(`/api/data?token=${encodeURIComponent(token)}&days=120`);
+  } catch (e) { console.warn("Actualización automática falló:", e); return; }
+  if (!resp.ok) { console.warn("Actualización automática falló:", resp.status); return; }
+  const { daily, activities } = await resp.json();
+  allDaily = daily;
+  allActivities = activities;
+  renderResumen(selectedDays);
+}
+
 async function load() {
   if (!token) {
     statusEl.textContent = "Falta el token de acceso. Abre el enlace completo que te dio Claude (con ?token=...).";
@@ -162,6 +176,10 @@ async function load() {
     btn.classList.add("active");
     renderResumen(Number(btn.dataset.days));
   });
+
+  // El workflow de GitHub corre cada hora; refrescamos cada 15 min para que
+  // el dashboard y el chat vean lo nuevo sin recargar la página a mano.
+  setInterval(refreshData, 15 * 60 * 1000);
 }
 
 function windowedDaily(days) {

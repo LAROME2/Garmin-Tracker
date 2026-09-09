@@ -113,6 +113,30 @@ function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 864
 let allRuns = [];
 let allRunsByDate = {};
 
+async function refreshData() {
+  // Refresco silencioso en segundo plano: no reinicia el chat, solo vuelve
+  // a traer /api/data y redibuja con lo último.
+  let resp;
+  try {
+    resp = await fetch(`/api/data?token=${encodeURIComponent(token)}&days=200`);
+  } catch (e) { console.warn("Actualización automática falló:", e); return; }
+  if (!resp.ok) { console.warn("Actualización automática falló:", resp.status); return; }
+
+  const { activities } = await resp.json();
+  const runs = activities.filter(a => (a.activity_type || "").includes("running"));
+  const runsByDate = {};
+  runs.forEach(r => { runsByDate[dateKey(r.start_time)] = r; });
+  allRuns = runs;
+  allRunsByDate = runsByDate;
+
+  renderRaceCard();
+  renderTodayCard(runsByDate);
+  renderCoachSlots();
+  renderVolumeChart(runs);
+  renderPlanTable(runsByDate);
+  renderStride(runs);
+}
+
 async function load() {
   if (!token) { statusEl.textContent = "Falta el token de acceso. Abre el enlace completo (con ?token=...)."; return; }
   let resp;
@@ -139,6 +163,9 @@ async function load() {
   renderPlanTable(runsByDate);
   renderStride(runs);
   initCoachChat();
+
+  // El workflow de GitHub corre cada hora; refrescamos cada 15 min.
+  setInterval(refreshData, 15 * 60 * 1000);
 }
 
 function renderRaceCard() {
